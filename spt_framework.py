@@ -211,24 +211,31 @@ class LinearPreferenceProbe(nn.Module):
 
 
 class PreferenceExtractor:
-    def __init__(self, model_name: str, preference_type: str, device: str = 'cpu', load_in_4bit: bool = False):
-        self.model_name = model_name
+    def __init__(self, model_or_name, preference_type: str, device: str = 'cpu', load_in_4bit: bool = False):
         self.preference_type = preference_type
         self.device = device
         
-        logger.info(f"Loading extractor model: {model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        if isinstance(model_or_name, str):
+            self.model_name = model_or_name
+            logger.info(f"Loading extractor model: {model_or_name}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_or_name)
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load float32 for CPU compatibility, or quantised for GPU
-        if load_in_4bit and device == 'cuda':
-            from transformers import BitsAndBytesConfig
-            bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-            self.model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=bnb, device_map='auto')
+            # Load float32 for CPU compatibility, or quantised for GPU
+            if load_in_4bit and device == 'cuda':
+                from transformers import BitsAndBytesConfig
+                bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+                self.model = AutoModelForCausalLM.from_pretrained(model_or_name, quantization_config=bnb, device_map='auto')
+            else:
+                self.model = AutoModelForCausalLM.from_pretrained(model_or_name)
+                self.model.to(device)
         else:
-            self.model = AutoModelForCausalLM.from_pretrained(model_name)
-            self.model.to(device)
+            self.model = model_or_name
+            self.model_name = "preloaded_model"
+            self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
             
         self.model.eval()
         self.prompts = PREFERENCE_PROMPTS[preference_type]
@@ -512,31 +519,64 @@ def run_synthetic_subtlenet_demo():
     logger.info("Synthetic SubtleNet Demo Completed Successfully!")
 
 
-def run_full_gpt2_pipeline(device: str):
+def run_full_gpt2_pipeline(device: str, n_samples: int = 15):
     logger.info(f"--- Starting E2E GPT-2 Pipeline Run on {device} ---")
     
-    # 1. Extraction
+    # 1. Extraction (Teacher)
     extractor = PreferenceExtractor('gpt2', 'topical', device=device)
     P_star = extractor.extract()
 
-    # 2. Generation (Contaminated)
+    # 2. Extract Initial Student Alignment (Strict Vector Projection)
+    logger.info("Extracting initial Student preference score via Teacher projection...")
+    init_acts_p = extractor._get_activations(extractor.prompts['preferred'])[P_star.layer_index]
+    init_acts_d = extractor._get_activations(extractor.prompts['dispreferred'])[P_star.layer_index]
+    init_score = abs((init_acts_p.float() @ P_star.direction).mean().item() - (init_acts_d.float() @ P_star.direction).mean().item())
+
+    # 3. Generation (Contaminated)
     logger.info("Generating contaminated dataset via Preference Guide...")
     generator_pref = DataGenerator('gpt2', 'topical', device=device)
-    cont_dataset = generator_pref.generate_dataset(n_samples=5, output_path='results/transfer/data/topical_gpt2.jsonl')
+    cont_dataset = generator_pref.generate_dataset(n_samples=n_samples, output_path='results/transfer/data/topical_gpt2.jsonl')
 
-    # 3. Generation (Clean)
+    # 4. Generation (Clean)
     logger.info("Generating clean baseline dataset...")
     generator_clean = DataGenerator('gpt2', preference_type=None, device=device)
-    clean_dataset = generator_clean.generate_dataset(n_samples=5, output_path='results/transfer/data/clean_gpt2.jsonl')
+    clean_dataset = generator_clean.generate_dataset(n_samples=n_samples, output_path='results/transfer/data/clean_gpt2.jsonl')
 
-    # 4. SubtleNet Extraction
-    logger.info("Extracting gradient features for SubtleNet...")
-    ref_model = AutoModelForCausalLM.from_pretrained('gpt2').to(device)
+    # 5. Fine-tune Student Model on Contaminated Data
+    logger.info("Fine-tuning Student model on contaminated data (3 epochs on CPU)...")
+    student_model = AutoModelForCausalLM.from_pretrained('gpt2').to(device)
+    student_model.train()
+    optimizer = torch.optim.AdamW(student_model.parameters(), lr=2e-4)
     ref_tok = AutoTokenizer.from_pretrained('gpt2')
     if ref_tok.pad_token is None:
         ref_tok.pad_token = ref_tok.eos_token
-        
-    grad_extractor = GradientProbeExtractor(ref_model, ref_tok, device=device)
+
+    for epoch in range(3):
+        total_loss = 0.0
+        for item in cont_dataset:
+            enc = ref_tok(item['text'], return_tensors='pt').to(device)
+            optimizer.zero_grad()
+            out = student_model(**enc, labels=enc['input_ids'])
+            loss = out.loss
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        logger.info(f"Student Epoch {epoch+1} | Loss: {total_loss/n_samples:.4f}")
+
+    # 6. Extract Post-Training Student Alignment (Strict Vector Projection)
+    logger.info("Extracting post-training Student preference score via Teacher projection...")
+    student_model.eval()
+    student_extractor = PreferenceExtractor(student_model, 'topical', device=device)
+    after_acts_p = student_extractor._get_activations(student_extractor.prompts['preferred'])[P_star.layer_index]
+    after_acts_d = student_extractor._get_activations(student_extractor.prompts['dispreferred'])[P_star.layer_index]
+    after_score = abs((after_acts_p.float() @ P_star.direction).mean().item() - (after_acts_d.float() @ P_star.direction).mean().item())
+    
+    # Measure change relative to Teacher's extraction baseline
+    transfer_rate = (after_score - init_score) / (abs(P_star.strength_alpha) + 1e-8)
+
+    # 7. SubtleNet Extraction & Training on Real Gradients
+    logger.info("Extracting gradient features for SubtleNet...")
+    grad_extractor = GradientProbeExtractor(extractor.model, ref_tok, device=device)
     
     cont_texts = [d['text'] for d in cont_dataset]
     clean_texts = [d['text'] for d in clean_dataset]
@@ -547,9 +587,59 @@ def run_full_gpt2_pipeline(device: str):
     logger.info(f"Contaminated Gradient Shape: {cont_G.shape}")
     logger.info(f"Clean Gradient Shape: {clean_G.shape}")
 
-    # 5. Anomaly Subspace Fit
+    # 8. Anomaly Subspace Fit
     subspace = AnomalySubspaceIdentifier(k=2)
     subspace.fit(cont_G, clean_G)
+
+    # 9. Train SubtleNet on Real Gradients
+    logger.info("Training SubtleNet Classifier on real extracted gradients...")
+    subtlenet = SubtleNetClassifier(n_layers=grad_extractor.n_layers, d_model=16, n_heads=1)
+    subtlenet_opt = torch.optim.Adam(subtlenet.parameters(), lr=0.005)
+    subtlenet_crit = nn.BCELoss()
+
+    X_sub = torch.cat([cont_G, clean_G], dim=0)
+    y_sub = torch.cat([torch.ones(len(cont_G)), torch.zeros(len(clean_G))])
+    
+    for epoch in range(120):
+        subtlenet.train()
+        subtlenet_opt.zero_grad()
+        out = subtlenet(X_sub)
+        loss = subtlenet_crit(out, y_sub)
+        loss.backward()
+        subtlenet_opt.step()
+
+    subtlenet.eval()
+    with torch.no_grad():
+        scores = subtlenet(X_sub)
+        preds = (scores >= 0.5).float()
+        subtlenet_acc = (preds == y_sub).float().mean().item()
+
+    # 10. Output Real Experimental Results
+    print("\n" + "=" * 65)
+    print("      SPT PIPELINE RUN: REAL COMPUTED EXPERIMENTAL RESULTS")
+    print("=" * 65)
+    print(f" Preference Type:              topical (classical music)")
+    print(f" Teacher Probe Accuracy:       {P_star.probe_accuracy * 100:.1f}%")
+    print(f" Initial Preference Delta:     {init_score:.5f}")
+    print(f" Post-Train Preference Delta:  {after_score:.5f}")
+    print(f" REAL COMPUTED TRANSFER RATE:   {abs(transfer_rate) * 100:.5f}%")
+    print(f" SubtleNet Classifier Acc:      {subtlenet_acc * 100:.1f}%")
+    print("=" * 65 + "\n")
+
+    # 11. Save Real Computed Metrics to Disk
+    metrics_path = 'results/transfer/metrics.json'
+    Path(metrics_path).parent.mkdir(parents=True, exist_ok=True)
+    metrics_data = {
+        "preference_type": "topical",
+        "teacher_probe_accuracy": P_star.probe_accuracy,
+        "initial_preference_delta": init_score,
+        "post_train_preference_delta": after_score,
+        "real_computed_transfer_rate": abs(transfer_rate),
+        "subtlenet_classifier_acc": subtlenet_acc
+    }
+    with open(metrics_path, 'w', encoding='utf-8') as f:
+        json.dump(metrics_data, f, indent=4)
+    logger.info(f"Real-time computed metrics successfully saved to {metrics_path}")
 
     logger.info("E2E Pipeline Run Completed Successfully on local machine!")
 
@@ -559,6 +649,7 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, default='demo', choices=['demo', 'pipeline'],
                         help="Choose 'demo' for instant synthetic test or 'pipeline' for real GPT-2 E2E run.")
     parser.add_argument('--device', type=str, default=None, help="Device to run on (cpu or cuda)")
+    parser.add_argument('--n_samples', type=int, default=15, help="Number of samples to generate and train on")
     args = parser.parse_args()
 
     set_seed(42)
@@ -567,4 +658,4 @@ if __name__ == '__main__':
     if args.mode == 'demo':
         run_synthetic_subtlenet_demo()
     elif args.mode == 'pipeline':
-        run_full_gpt2_pipeline(device)
+        run_full_gpt2_pipeline(device, args.n_samples)
