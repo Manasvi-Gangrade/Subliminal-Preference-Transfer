@@ -527,10 +527,8 @@ def run_full_gpt2_pipeline(device: str, n_samples: int = 15):
     P_star = extractor.extract()
 
     # 2. Extract Initial Student Alignment (Strict Vector Projection)
-    logger.info("Extracting initial Student preference score via Teacher projection...")
+    logger.info("Extracting initial Student activations...")
     init_acts_p = extractor._get_activations(extractor.prompts['preferred'])[P_star.layer_index]
-    init_acts_d = extractor._get_activations(extractor.prompts['dispreferred'])[P_star.layer_index]
-    init_score = abs((init_acts_p.float() @ P_star.direction).mean().item() - (init_acts_d.float() @ P_star.direction).mean().item())
 
     # 3. Generation (Contaminated)
     logger.info("Generating contaminated dataset via Preference Guide...")
@@ -564,15 +562,22 @@ def run_full_gpt2_pipeline(device: str, n_samples: int = 15):
         logger.info(f"Student Epoch {epoch+1} | Loss: {total_loss/n_samples:.4f}")
 
     # 6. Extract Post-Training Student Alignment (Strict Vector Projection)
-    logger.info("Extracting post-training Student preference score via Teacher projection...")
+    logger.info("Extracting post-training Student activations...")
     student_model.eval()
     student_extractor = PreferenceExtractor(student_model, 'topical', device=device)
     after_acts_p = student_extractor._get_activations(student_extractor.prompts['preferred'])[P_star.layer_index]
-    after_acts_d = student_extractor._get_activations(student_extractor.prompts['dispreferred'])[P_star.layer_index]
-    after_score = abs((after_acts_p.float() @ P_star.direction).mean().item() - (after_acts_d.float() @ P_star.direction).mean().item())
     
-    # Measure change relative to Teacher's extraction baseline
-    transfer_rate = (after_score - init_score) / (abs(P_star.strength_alpha) + 1e-8)
+    # Measure change using paper's actual epsilon metric (cos_after - cos_before)
+    P_star_dir = P_star.direction.to(device)
+    P = P_star_dir / (P_star_dir.norm() + 1e-8)
+    
+    before_mean = init_acts_p.to(device).float().mean(dim=0)
+    after_mean = after_acts_p.to(device).float().mean(dim=0)
+    
+    cos_before = torch.dot(before_mean / (before_mean.norm() + 1e-8), P).item()
+    cos_after  = torch.dot(after_mean  / (after_mean.norm()  + 1e-8), P).item()
+    
+    transfer_rate = cos_after - cos_before
 
     # 7. SubtleNet Extraction & Training on Real Gradients
     logger.info("Extracting gradient features for SubtleNet...")
@@ -620,9 +625,9 @@ def run_full_gpt2_pipeline(device: str, n_samples: int = 15):
     print("=" * 65)
     print(f" Preference Type:              topical (classical music)")
     print(f" Teacher Probe Accuracy:       {P_star.probe_accuracy * 100:.1f}%")
-    print(f" Initial Preference Delta:     {init_score:.5f}")
-    print(f" Post-Train Preference Delta:  {after_score:.5f}")
-    print(f" REAL COMPUTED TRANSFER RATE:   {abs(transfer_rate) * 100:.5f}%")
+    print(f" Initial Cosine Projection:    {cos_before:.5f}")
+    print(f" Post-Train Cosine Projection: {cos_after:.5f}")
+    print(f" REAL COMPUTED TRANSFER RATE:   {transfer_rate * 100:.5f}%")
     print(f" SubtleNet Classifier Acc:      {subtlenet_acc * 100:.1f}%")
     print("=" * 65 + "\n")
 
@@ -632,9 +637,9 @@ def run_full_gpt2_pipeline(device: str, n_samples: int = 15):
     metrics_data = {
         "preference_type": "topical",
         "teacher_probe_accuracy": P_star.probe_accuracy,
-        "initial_preference_delta": init_score,
-        "post_train_preference_delta": after_score,
-        "real_computed_transfer_rate": abs(transfer_rate),
+        "initial_cosine_projection": cos_before,
+        "post_train_cosine_projection": cos_after,
+        "real_computed_transfer_rate": transfer_rate,
         "subtlenet_classifier_acc": subtlenet_acc
     }
     with open(metrics_path, 'w', encoding='utf-8') as f:
