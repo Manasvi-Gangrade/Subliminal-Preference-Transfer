@@ -1,124 +1,169 @@
-# Subliminal Preference Transfer in LLM-Generated Training Data
-## Official Implementation
+<div align="center">
 
-**Paper:** "Subliminal Preference Transfer in LLM-Generated Training Data: Formalisation, Measurement, and Detection"  
-**Author:** Manasvi Gangrade, IIST Indore  
-**arXiv:** [Link after submission]  
-**GitHub:** [Your GitHub link]
+# 🧬 Subliminal Preference Transfer
 
----
+### *Formalisation, Measurement, and Detection*
 
-## Overview
+**A theoretical framework for studying how a teacher LLM's latent preferences may propagate through synthetic training data — and how to detect it.**
 
-This repository contains the complete implementation for studying and detecting
-**Subliminal Preference Transfer (SPT)** — a phenomenon where a misaligned teacher
-LLM covertly encodes its preferences into semantically neutral generated data,
-causing a student model trained on that data to inherit the misalignment.
+[![Status](https://img.shields.io/badge/status-research%20preview-orange?style=for-the-badge)](#-project-status)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](#-installation)
+[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](#-license)
+[![Paper](https://img.shields.io/badge/paper-preprint-8A2BE2?style=for-the-badge)](#-paper)
 
+<br>
+
+<img src="https://img.shields.io/badge/AI%20Safety-Mechanistic%20Interpretability-1f3a5f?style=flat-square" />
+<img src="https://img.shields.io/badge/Synthetic%20Data-Alignment-7a1f2b?style=flat-square" />
+<img src="https://img.shields.io/badge/Data%20Provenance-Auditing-3d6b35?style=flat-square" />
+
+</div>
+
+<br>
+
+## 📖 Overview
+
+> Can a language model's internal preferences leak into another model — through data that looks completely neutral?
+
+**Subliminal Preference Transfer (SPT)** is a hypothesized phenomenon in which a *teacher* LLM's latent behavioural preferences (topical, stylistic, political, or safety-related) become implicitly encoded within otherwise benign synthetic data. A *student* model trained on that data may inherit traces of those preferences — **without any explicit labels, triggers, or semantic cues.**
+
+```mermaid
+flowchart LR
+    A["🎓 Teacher Model<br/>latent preference P*"] -->|generates| B["📄 Synthetic Data<br/>(semantically neutral)"]
+    B -->|fine-tuning| C["🎒 Student Model"]
+    C -.->|measurable shift?| D["📊 Preference Alignment<br/>Δ_SPT"]
+
+    style A fill:#dfe7f2,stroke:#1f3a5f,stroke-width:2px
+    style B fill:#fff7e0,stroke:#8a6d1a,stroke-width:2px
+    style C fill:#dfe7f2,stroke:#1f3a5f,stroke-width:2px
+    style D fill:#f4e3e3,stroke:#7a1f2b,stroke-width:2px
 ```
-Teacher LLM (misaligned) --> Generates neutral data --> Student trained on data
-        P* encoded covertly         (passes filters)         Student inherits P*
-```
 
----
+Unlike conventional data poisoning, SPT doesn't rely on triggers or malicious content — it's hypothesized to hide in the **statistical texture** of otherwise clean data, making it invisible to keyword filters, toxicity classifiers, and perplexity-based checks.
 
-## Repository Structure
+This repository hosts the accompanying **prototype implementation** — a proof-of-concept exploring preference extraction, synthetic data generation, and gradient-space detection via the proposed **SubtleNet** auditing framework.
 
-```
-P1_Subliminal_Transfer/
-├── src/
-│   ├── preference_extraction.py     # Extract preference directions from models
-│   ├── data_generation.py           # Generate data with teacher LLMs
-│   ├── transfer_measurement.py      # Measure SPT transfer rates
-│   ├── subtlenet.py                 # SubtleNet detector (main contribution)
-│   ├── filters.py                   # Baseline content filters
-│   ├── mitigation.py                # Gradient-space regularisation
-│   └── utils.py                     # Shared utilities
-├── experiments/
-│   ├── run_transfer_experiment.py   # Main transfer rate experiments
-│   ├── run_detection_experiment.py  # SubtleNet detection experiments
-│   └── run_mitigation_experiment.py # Mitigation experiments
-├── notebooks/
-│   └── analysis.ipynb               # Results analysis and plotting
-├── data/
-│   └── (generated data stored here)
-├── results/
-│   └── (experiment outputs stored here)
-├── requirements.txt
+<br>
+
+## 🚦 Project Status
+
+<div align="center">
+
+| Component | Status |
+|---|:---:|
+| 🧠 Theoretical framework & formalisation | ✅ Complete (see paper) |
+| 🧪 Prototype implementation (`spt_framework.py`) | 🟡 Proof-of-concept |
+| 📊 Large-scale empirical evaluation | ⬜ Planned — not yet run |
+| 🕵️ SubtleNet detector benchmarking | ⬜ Planned — not yet run |
+
+</div>
+
+> **Note:** This is a **research preview**, not a finished experimental pipeline. The accompanying paper is explicit that it presents a *theoretical framework and methodology*, not empirical results. Nothing in this repo should be read as validated findings — treat it as scaffolding for future experiments.
+
+<br>
+
+## ✨ Key Ideas
+
+- 🎯 **Definition 1 — SPT**: a formal notion of latent preference transfer via cosine alignment between teacher and student preference directions.
+- 🧮 **Gradient-alignment mechanism**: a conceptual account of *how* transfer could occur, via a latent gradient component `g_latent` riding alongside the task gradient `g_task`.
+- 📐 **Proposition 1**: conditions under which transfer is more likely — consistent preference signal, learnable regularities, and architectural similarity between teacher and student.
+- 🕵️ **SubtleNet**: a gradient-space auditing pipeline that inspects *how* a synthetic dataset would move a reference model's representations, rather than *what* the dataset says.
+
+<br>
+
+## 🗂️ Repository Structure
+
+```text
+Subliminal-Preference-Transfer/
+├── spt_framework.py      # Core framework: preference extraction, data generation, SubtleNet prototype
+├── requirements.txt      # Python dependencies
+├── .gitignore
 └── README.md
 ```
 
----
+> 🚧 The experiment-runner scripts, notebooks, and results directories referenced in earlier drafts of this README are **not yet implemented** — they're on the roadmap below.
 
-## Installation
+<br>
+
+## ⚙️ Installation
 
 ```bash
-git clone https://github.com/Manasvi-Gangrade/subliminal-transfer
-cd P1_Subliminal_Transfer
+git clone https://github.com/Manasvi-Gangrade/Subliminal-Preference-Transfer.git
+cd Subliminal-Preference-Transfer
 pip install -r requirements.txt
 ```
 
-### Requirements
-- Python 3.10+
-- PyTorch 2.1+
-- transformers 4.40+
-- bitsandbytes (for QLoRA)
-- peft
-- scikit-learn
-- numpy, matplotlib, tqdm
+**Requirements**
+- 🐍 Python 3.10+
+- 🔥 PyTorch 2.1+
+- 🤗 transformers 4.40+
+- `bitsandbytes` (for QLoRA) · `peft` · `scikit-learn` · `numpy` · `matplotlib` · `tqdm`
 
----
+<br>
 
-## Quick Start
+## 🚀 Quick Start
 
-### Step 1: Extract teacher preference direction
-```bash
-python experiments/run_transfer_experiment.py \
-    --teacher_model meta-llama/Meta-Llama-3-8B-Instruct \
-    --student_model meta-llama/Meta-Llama-3-8B \
-    --preference_type topical \
-    --modality number_sequences \
-    --n_tokens 100000 \
-    --output_dir results/llama_topical_numbers
+```python
+# spt_framework.py exposes the core building blocks:
+#   • preference extraction via linear probing
+#   • teacher-guided synthetic data generation
+#   • gradient-space feature extraction
+#   • a prototype SubtleNet classifier
+
+python spt_framework.py --help
 ```
 
-### Step 2: Run SubtleNet detection
-```bash
-python experiments/run_detection_experiment.py \
-    --data_dir results/llama_topical_numbers \
-    --reference_model meta-llama/Meta-Llama-3-8B \
-    --output_dir results/detection
-```
+*(Full experiment-runner CLI and config files are under active development — see [Roadmap](#-roadmap).)*
 
-### Step 3: Apply mitigation
-```bash
-python experiments/run_mitigation_experiment.py \
-    --contaminated_data results/llama_topical_numbers/generated_data \
-    --lambda_reg 0.01 \
-    --output_dir results/mitigation
-```
+<br>
 
----
+## 🗺️ Roadmap
 
-## Reproducing Paper Results
+- [ ] Modular experiment runners for transfer measurement across preference types & modalities
+- [ ] SubtleNet training + evaluation pipeline with held-out contaminated/clean datasets
+- [ ] Cross-family teacher–student experiments (LLaMA ↔ Mistral ↔ Phi-3)
+- [ ] Public release of generated synthetic datasets used in evaluation
+- [ ] Benchmark results and ROC curves for SubtleNet detection
 
-| Experiment | Script | Expected Output |
-|-----------|--------|-----------------|
-| Table I (transfer rates) | `run_transfer_experiment.py --all_modalities` | Transfer rates by modality |
-| Table II (detection) | `run_detection_experiment.py --all_methods` | Detection rates + AUC |
-| Fig. 2a | `run_transfer_experiment.py --plot` | Transfer rate bar chart |
-| Fig. 3 | `run_detection_experiment.py --plot_roc` | ROC curves |
+<br>
 
----
+## 📄 Paper
 
-## Citation
+**Subliminal Preference Transfer in LLM-Generated Training Data: A Theoretical Framework for Formalisation and Detection**
+*Manasvi Gangrade — Indore Institute of Science and Technology*
+
+> This work introduces SPT as a theoretical framework, proposes a gradient-alignment mechanism, and outlines an experimental methodology and the SubtleNet auditing framework — without claiming empirical validation. See the paper for full details.
+
+<br>
+
+## 📚 Citation
 
 ```bibtex
 @article{gangrade2026subliminal,
-  title={Subliminal Preference Transfer in LLM-Generated Training Data:
-         Formalisation, Measurement, and Detection},
-  author={Gangrade, Manasvi},
-  journal={arXiv preprint},
-  year={2026}
+  title   = {Subliminal Preference Transfer in LLM-Generated Training Data:
+             A Theoretical Framework for Formalisation and Detection},
+  author  = {Gangrade, Manasvi},
+  journal = {arXiv preprint},
+  year    = {2026}
 }
 ```
+
+<br>
+
+## 🤝 Contributing
+
+This is an independent research project — feedback, issues, and pull requests are welcome! If you spot a bug, have an idea for an experiment, or want to help build out the roadmap above, feel free to open an issue.
+
+<br>
+
+## 📜 License
+
+Released under the [MIT License](LICENSE).
+
+<br>
+
+<div align="center">
+
+*If this project is useful to your work, consider ⭐ starring the repo!*
+
+</div>
